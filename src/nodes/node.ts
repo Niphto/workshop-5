@@ -1,50 +1,82 @@
-import bodyParser from "body-parser";
 import express from "express";
 import { BASE_NODE_PORT } from "../config";
-import { Value } from "../types";
+import { NodeState, Value } from "../types";
+import { delay } from "../utils";
 
 export async function node(
-  nodeId: number, // the ID of the node
-  N: number, // total number of nodes in the network
-  F: number, // number of faulty nodes in the network
-  initialValue: Value, // initial value of the node
-  isFaulty: boolean, // true if the node is faulty, false otherwise
-  nodesAreReady: () => boolean, // used to know if all nodes are ready to receive requests
-  setNodeIsReady: (index: number) => void // this should be called when the node is started and ready to receive requests
-) {
-  const node = express();
-  node.use(express.json());
-  node.use(bodyParser.json());
+    nodeId: number,
+    N: number,
+    F: number,
+    initialValue: Value,
+    isFaulty: boolean,
+    nodesAreReady: () => boolean,
+    setNodeIsReady: (index: number) => void) {const node = express();node.use(express.json());
+  let cur: NodeState = { killed: false, x: null, decided: null, k: null };
+  let tries = new Map<number, Value[]>();
+  let thepeoplevoice = new Map<number, Value[]>();
 
-  // TODO implement this
-  // this route allows retrieving the current status of the node
-  // node.get("/status", (req, res) => {});
-
-  // TODO implement this
-  // this route allows the node to receive messages from other nodes
-  // node.post("/message", (req, res) => {});
-
-  // TODO implement this
-  // this route is used to start the consensus algorithm
-  // node.get("/start", async (req, res) => {});
-
-  // TODO implement this
-  // this route is used to stop the consensus algorithm
-  // node.get("/stop", async (req, res) => {});
-
-  // TODO implement this
-  // get the current state of a node
-  // node.get("/getState", (req, res) => {});
-
-  // start the server
-  const server = node.listen(BASE_NODE_PORT + nodeId, async () => {
-    console.log(
-      `Node ${nodeId} is listening on port ${BASE_NODE_PORT + nodeId}`
-    );
-
-    // the node is ready
-    setNodeIsReady(nodeId);
+  node.get("/status", (req, res) => res.status(isFaulty ? 500 : 200).send(isFaulty ? "faulty" : "live"));
+  node.get("/getState", (req, res) => res.status(200).send(cur));
+  node.get("/stop", (req, res) => {
+    cur.killed = true;
+    res.status(200).send("killed");});
+  node.post("/message", async (req, res) => {
+    let { k, x, messageType } = req.body;
+    if (!isFaulty && !cur.killed) {
+      if (messageType == "propose") {
+        if (!tries.has(k)) {
+          tries.set(k, []);}
+        tries.get(k)!.push(x); // Use '!' to assert non-null after the check
+        let essay = tries.get(k)!;
+        if (essay.length >= (N - F)) {
+          let fcnt = essay.filter((el)=> el==0).length;
+          let fcntsec = essay.filter((el)=> el== 1).length;
+          if (fcnt>(N/2)){x = 0;} else if (fcntsec > (N / 2)) {x = 1;} else {x="?";}
+          for (let i = 0; i < N; i++) {
+            fetch(`http://localhost:${BASE_NODE_PORT + i}/message`, {
+              method: 'POST',
+              headers: {'Content-Type': 'application/json',},
+              body: JSON.stringify({ k: k, x: x, messageType: "Thevoice" }),});}
+        }
+      }
+      else if (messageType == "Thevoice") {
+        if (!thepeoplevoice.has(k)) {thepeoplevoice.set(k, []);}
+        thepeoplevoice.get(k)!.push(x)
+        let Thevoice = thepeoplevoice.get(k)!;
+        if (Thevoice.length >= (N - F)) {
+          let fcnt = Thevoice.filter((el) => el == 0).length;
+          let fcntsec = Thevoice.filter((el) => el == 1).length;
+          if (fcnt >= F + 1) {cur.x = 0;
+            cur.decided = true;} else if (fcntsec >= F + 1) {
+            cur.x = 1;
+            cur.decided = true;} else {
+            if (fcnt + fcntsec > 0 && fcnt > fcntsec) {
+              cur.x = 0;} else if (fcnt + fcntsec > 0 && fcnt < fcntsec) {
+              cur.x = 1;} else {
+              cur.x = Math.random() > 0.5 ? 0 : 1;}
+            cur.k = k + 1;
+            for (let i = 0; i < N; i++) {
+              fetch(`http://localhost:${BASE_NODE_PORT + i}/message`, {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json',},
+                body: JSON.stringify({k: cur.k, x: cur.x, messageType: "propose"}),});}
+          }
+        }
+      }
+    }
+    res.status(200).send("Message received and processed.");
   });
+  node.get("/start", async (req, res) => {
+    while (!nodesAreReady()) await delay(5);
+    if (!isFaulty) {
+      cur = { killed: false, x: initialValue, decided: false, k: 1 };
+      for (let i = 0; i < N; i++) {
+        fetch(`http://localhost:${BASE_NODE_PORT + i}/message`, {method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ k: cur.k, x: cur.x, messageType: "propose" }),});}
+    } else {cur = { killed: false, x: null, decided: null, k: null };}
+    res.status(200).send("Consensus algorithm started.");});
 
+  const server = node.listen(BASE_NODE_PORT + nodeId, () => {
+    console.log(`Node ${nodeId} is listening on port ${BASE_NODE_PORT + nodeId}`);
+    setNodeIsReady(nodeId);});
   return server;
 }
