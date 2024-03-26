@@ -26,7 +26,7 @@ export async function node(
       if (messageType == "propose") {
         if (!tries.has(k)) {
           tries.set(k, []);}
-        tries.get(k)!.push(x); // Use '!' to assert non-null after the check
+        tries.get(k)!.push(x);
         let essay = tries.get(k)!;
         if (essay.length >= (N - F)) {
           let fcnt = essay.filter((el)=> el==0).length;
